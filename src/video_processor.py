@@ -222,9 +222,11 @@ class VideoProcessor:
         if not session_name:
             session_name = "default_session"
 
+
         session_start_time = time.time()
         session_end_time = session_start_time + session_duration
-        detected_time_per_student = {}  # name -> seconds detected
+        successful_detections_per_student = {}  # name -> count of successful detections
+        total_detection_attempts = 0  # total number of detection attempts (frames where detection is performed)
         all_detected_students = set()
         present_students = set()
 
@@ -242,9 +244,11 @@ class VideoProcessor:
 
                 frame_count += 1
 
+
                 detected_this_frame = set()
 
                 if frame_count % self.process_every_n == 0:
+                    total_detection_attempts += 1
                     rgb_small = self.face_detector.preprocess_frame(frame, self.resize_scale)
                     locations_small = self.face_detector.detect_faces(rgb_small)
                     face_encodings = self.face_detector.encode_faces(rgb_small, locations_small)
@@ -280,12 +284,12 @@ class VideoProcessor:
                         else:
                             self.logger.info("Unknown face detected")
 
-                # Update detected time for each student detected in this frame
+                # Update successful detections for each student detected in this frame
                 for name in detected_this_frame:
                     if name == "Unknown":
                         continue
-                    detected_time_per_student.setdefault(name, 0.0)
-                    detected_time_per_student[name] += 1.0 / max(1, int(fps_value) or 1)  # approx seconds
+                    successful_detections_per_student.setdefault(name, 0)
+                    successful_detections_per_student[name] += 1
                     all_detected_students.add(name)
 
                 self._draw_tracks(frame)
@@ -306,19 +310,20 @@ class VideoProcessor:
 
             # After session, mark attendance for all students
             # Fetch all students from DB
+
             db_students = self.attendance_manager.get_all_students()
-            session_total = session_duration
-            threshold = 0.75 * session_total
+            detection_threshold = 0.75  # 75% of detection attempts
             for name in db_students:
-                detected_time = detected_time_per_student.get(name, 0.0)
-                status = "Present" if detected_time >= threshold else "Absent"
+                detections = successful_detections_per_student.get(name, 0)
+                percent = (detections / total_detection_attempts * 100) if total_detection_attempts > 0 else 0.0
+                status = "Present" if percent >= (detection_threshold * 100) else "Absent"
                 self.attendance_manager.mark_attendance(
                     student_name=name,
                     status=status,
                     session_name=session_name,
-                    duration=detected_time,
+                    duration=percent,  # Store detection percentage in duration column for reporting
                 )
-                self.logger.info(f"Session '{session_name}': {name} - {status} ({detected_time:.1f}s detected)")
+                self.logger.info(f"Session '{session_name}': {name} - {status} ({percent:.1f}% detection)")
 
             if report_path is not None:
                 self.attendance_manager.generate_report(report_path)

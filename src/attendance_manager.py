@@ -42,7 +42,7 @@ class AttendanceManager:
                     session TEXT,
                     duration REAL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(name, date, session)
+                    UNIQUE(session, id)
                 )
                 """
             )

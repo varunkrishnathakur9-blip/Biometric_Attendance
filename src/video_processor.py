@@ -312,7 +312,7 @@ class VideoProcessor:
             # Fetch all students from DB
 
             db_students = self.attendance_manager.get_all_students()
-            detection_threshold = 0.75  # 75% of detection attempts
+            detection_threshold = 0.60  # 75% of detection attempts
             for name in db_students:
                 detections = successful_detections_per_student.get(name, 0)
                 percent = (detections / total_detection_attempts * 100) if total_detection_attempts > 0 else 0.0

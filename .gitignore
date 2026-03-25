@@ -5,3 +5,8 @@
 __pycache__/
 *.pyc
 .venv/
+
+# Ignore datasets and sensitive data
+dataset/
+encodings/
+database/

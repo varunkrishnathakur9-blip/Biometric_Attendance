@@ -204,6 +204,8 @@ class VideoProcessor:
         source: Union[int, str] = 0,
         window_name: str = "Automated Attendance",
         report_path: Optional[Path] = None,
+        session_name: Optional[str] = None,
+        session_duration: Optional[int] = None,
     ) -> None:
         capture = cv2.VideoCapture(source)
         if not capture.isOpened():
@@ -214,14 +216,33 @@ class VideoProcessor:
         fps_timer = time.time()
         fps_value = 0.0
 
+        # Session attendance tracking
+        if session_duration is None or session_duration <= 0:
+            session_duration = 60  # default 60s if not provided
+        if not session_name:
+            session_name = "default_session"
+
+        session_start_time = time.time()
+        session_end_time = session_start_time + session_duration
+        detected_time_per_student = {}  # name -> seconds detected
+        all_detected_students = set()
+        present_students = set()
+
         try:
             while True:
+                now = time.time()
+                if now >= session_end_time:
+                    self.logger.info("Session duration elapsed. Stopping attendance.")
+                    break
+
                 ret, frame = capture.read()
                 if not ret:
                     self.logger.info("End of video stream or frame capture failed")
                     break
 
                 frame_count += 1
+
+                detected_this_frame = set()
 
                 if frame_count % self.process_every_n == 0:
                     rgb_small = self.face_detector.preprocess_frame(frame, self.resize_scale)
@@ -238,6 +259,7 @@ class VideoProcessor:
 
                         # Known tracks are not repeatedly re-recognized.
                         if track.name != "Unknown":
+                            detected_this_frame.add(track.name)
                             continue
 
                         if frame_count - track.last_recognition_frame < self.recognition_cooldown_frames:
@@ -253,13 +275,18 @@ class VideoProcessor:
                         track.last_recognition_frame = frame_count
 
                         if result.is_known:
-                            marked, message = self.attendance_manager.mark_attendance(result.name)
-                            if marked:
-                                self.logger.info("Detected: %s -> Attendance Marked", result.name)
-                            else:
-                                self.logger.info("Detected: %s -> %s", result.name, message)
+                            detected_this_frame.add(result.name)
+                            all_detected_students.add(result.name)
                         else:
                             self.logger.info("Unknown face detected")
+
+                # Update detected time for each student detected in this frame
+                for name in detected_this_frame:
+                    if name == "Unknown":
+                        continue
+                    detected_time_per_student.setdefault(name, 0.0)
+                    detected_time_per_student[name] += 1.0 / max(1, int(fps_value) or 1)  # approx seconds
+                    all_detected_students.add(name)
 
                 self._draw_tracks(frame)
 
@@ -276,6 +303,22 @@ class VideoProcessor:
         finally:
             capture.release()
             cv2.destroyAllWindows()
+
+            # After session, mark attendance for all students
+            # Fetch all students from DB
+            db_students = self.attendance_manager.get_all_students()
+            session_total = session_duration
+            threshold = 0.75 * session_total
+            for name in db_students:
+                detected_time = detected_time_per_student.get(name, 0.0)
+                status = "Present" if detected_time >= threshold else "Absent"
+                self.attendance_manager.mark_attendance(
+                    student_name=name,
+                    status=status,
+                    session_name=session_name,
+                    duration=detected_time,
+                )
+                self.logger.info(f"Session '{session_name}': {name} - {status} ({detected_time:.1f}s detected)")
 
             if report_path is not None:
                 self.attendance_manager.generate_report(report_path)

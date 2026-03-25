@@ -30,6 +30,7 @@ class AttendanceManager:
                 )
                 """
             )
+            # Add session and duration columns if not present
             self.connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS attendance (
@@ -38,11 +39,22 @@ class AttendanceManager:
                     date TEXT NOT NULL,
                     time TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    session TEXT,
+                    duration REAL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(name, date)
+                    UNIQUE(name, date, session)
                 )
                 """
             )
+            # Try to add columns if missing (for upgrades)
+            try:
+                self.connection.execute("ALTER TABLE attendance ADD COLUMN session TEXT")
+            except Exception:
+                pass
+            try:
+                self.connection.execute("ALTER TABLE attendance ADD COLUMN duration REAL")
+            except Exception:
+                pass
             self.connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_attendance_date
@@ -52,13 +64,16 @@ class AttendanceManager:
 
         self.logger.info("Database initialized at %s", self.db_path)
 
+
     def mark_attendance(
         self,
         student_name: str,
         status: str = "Present",
         timestamp: Optional[datetime] = None,
+        session_name: Optional[str] = None,
+        duration: Optional[float] = None,
     ) -> Tuple[bool, str]:
-        """Mark attendance for a student once per day.
+        """Mark attendance for a student for a session (session_name as string, or fallback to date).
 
         Returns:
             Tuple[bool, str]: (was_marked, message)
@@ -78,21 +93,36 @@ class AttendanceManager:
                 )
                 self.connection.execute(
                     """
-                    INSERT INTO attendance(name, date, time, status)
-                    VALUES (?, ?, ?, ?)
+                    INSERT OR REPLACE INTO attendance(name, date, time, status, session, duration)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (student_name, date_str, time_str, status),
+                    (student_name, date_str, time_str, status, session_name, duration),
                 )
-            message = f"Attendance marked for {student_name}"
+                def generate_report(self, report_path: Path) -> None:
+                    # Export all attendance records with new columns
+                    df = pd.read_sql_query(
+                        "SELECT name, date, time, status, session, duration FROM attendance ORDER BY date DESC, time DESC",
+                        self.connection,
+                    )
+                    df.rename(columns={"date": "Date", "time": "Time", "name": "Name", "status": "Status", "session": "Session", "duration": "Duration"}, inplace=True)
+                    df.to_csv(report_path, index=False)
+                    self.logger.info(f"Attendance report generated at {report_path}")
+            message = f"Attendance marked for {student_name} ({status}) in session '{date_str}'"
             self.logger.info(message)
             return True, message
         except sqlite3.IntegrityError:
-            message = f"Attendance already marked today for {student_name}"
+            message = f"Attendance already marked for {student_name} in session '{date_str}'"
             self.logger.info(message)
             return False, message
         except Exception as exc:  # pragma: no cover - defensive path
             self.logger.exception("Failed to mark attendance: %s", exc)
             return False, f"Failed to mark attendance for {student_name}"
+
+    def get_all_students(self) -> list:
+        cur = self.connection.cursor()
+        cur.execute("SELECT name FROM students")
+        # Return a list of names (str), not sqlite3.Row objects
+        return [row[0] for row in cur.fetchall()]
 
     def fetch_attendance(self, date: Optional[str] = None) -> List[sqlite3.Row]:
         query = "SELECT name, date, time, status FROM attendance"
@@ -106,20 +136,29 @@ class AttendanceManager:
         return cursor.fetchall()
 
     def generate_report(self, output_csv_path: Path, date: Optional[str] = None) -> Path:
-        rows = self.fetch_attendance(date=date)
-        data = [dict(row) for row in rows]
+        # Export all attendance records with new columns
+        query = "SELECT name, date, time, status, session, duration FROM attendance"
+        params = ()
+        if date:
+            query += " WHERE date = ?"
+            params = (date,)
+        query += " ORDER BY date DESC, time DESC"
 
-        df = pd.DataFrame(data, columns=["name", "date", "time", "status"])
-        df.rename(
-            columns={"name": "Name", "date": "Date", "time": "Time", "status": "Status"},
-            inplace=True,
-        )
+        df = pd.read_sql_query(query, self.connection, params=params)
+        df.rename(columns={
+            "name": "Name",
+            "date": "Date",
+            "time": "Time",
+            "status": "Status",
+            "session": "Session",
+            "duration": "Duration"
+        }, inplace=True)
 
         output_path = Path(output_csv_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)
 
-        self.logger.info("Attendance report generated at %s", output_path)
+        self.logger.info(f"Attendance report generated at {output_path}")
         return output_path
 
     def close(self) -> None:

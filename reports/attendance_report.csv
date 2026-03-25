@@ -1,3 +1,7 @@
-Name,Date,Time,Status
-Varun2022BCY0015,2026-03-25,17:41:10,Present
-Suraj2022BCS0051,2026-03-25,17:44:31,Present
+Name,Date,Time,Status,Session,Duration
+Suraj2022BCS0051,session2,20:57:56,Absent,session2,0.0
+Varun2022BCY0015,session2,20:57:56,Absent,session2,1.3879122688928354
+Suraj2022BCS0051,session1,20:16:06,Absent,,
+Varun2022BCY0015,session1,20:16:06,Absent,,
+Suraj2022BCS0051,2026-03-25,21:12:42,Absent,session4,0.0
+Varun2022BCY0015,2026-03-25,21:12:42,Absent,session4,2.410304029982338
